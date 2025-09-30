@@ -1,158 +1,223 @@
 #pragma once
-#include "node.hpp"
 #include <iostream>
 #include <memory>
+#include <stdexcept>
+#include <utility>
 
-template <typename Key, typename Compare = std::less<Key>> class Tree234 {
+template <class Key, class Compare = std::less<Key>> class RBTree {
   public:
-	// Constructor: initially the root is a leaf node with no keys
-	Tree234() : root(std::make_unique<Node<Key>>(true)) {}
+	RBTree() = default;
 
-	// Insert a new key into the tree
-	void insert(const Key &k) {
-		// If the root is full (3 keys), we must split it first
-		if (root->keys.size() == MAX_KEYS) {
-			auto newRoot = std::make_unique<Node<Key>>(false);
-			// old root becomes child 0 of the new root
-			newRoot->children.push_back(std::move(root));
-			// split that full child
-			splitChild(newRoot.get(), 0);
-			// update root
-			root = std::move(newRoot);
+	bool contains(const Key &k) const {
+		const Node *x = root_.get();
+		while (x) {
+			if (cmp_(k, x->key))
+				x = x->left.get();
+			else if (cmp_(x->key, k))
+				x = x->right.get();
+			else
+				return true;
 		}
-		// Now the root is guaranteed to be non-full, so we can insert
-		insertNonFull(root.get(), k);
+		return false;
+	}
+
+	void insert(const Key &k) {
+		// BST insert using unique_ptr ownership
+		Node *parent = nullptr;
+		std::unique_ptr<Node> *cur = &root_;
+		while (cur->get()) {
+			parent = cur->get();
+			if (cmp_(k, parent->key))
+				cur = &parent->left;
+			else if (cmp_(parent->key, k))
+				cur = &parent->right;
+			else
+				return; // no duplicates
+		}
+		cur->reset(new Node(k, /*red=*/true, parent));
+		fixAfterInsert(cur->get());
+		root_->red = false; // property 2: root is black
 	}
 
 	void inorder(std::ostream &os = std::cout) const {
-		inorderVisit(root.get(), os);
+		inorderVisit(root_.get(), os);
 		os << '\n';
 	}
 
-	// Print the structure of the tree
+	// Pretty print: one node per line, indentation by depth, color tag
 	void printTree(std::ostream &os = std::cout) const {
-		printNode(root.get(), 0, os);
+		printNode(root_.get(), 0, os);
+	}
+
+	// Check core RB properties (throws if violated)
+	void verify() const {
+		if (root_ && root_->red)
+			throw std::logic_error("root is not black");
+		checkNoRedRed(root_.get());
+		int h = blackHeight(root_.get());
+		if (h < 0)
+			throw std::logic_error("black-height mismatch");
 	}
 
   private:
-	static constexpr std::size_t MIN_DEGREE = 2; // B-tree with t=2
-	static constexpr std::size_t MAX_KEYS = 2 * MIN_DEGREE - 1; // 3 keys max
-	static constexpr std::size_t MIN_KEYS =
-		MIN_DEGREE - 1; // 1 key min (except root)
+	struct Node {
+		Key key;
+		bool red; // true = red, false = black
+		std::unique_ptr<Node> left, right;
+		Node *parent = nullptr;
+		Node(const Key &k, bool r, Node *p) : key(k), red(r), parent(p) {}
+	};
 
-	// Root node
-	std::unique_ptr<Node<Key>> root;
-	// Compare function
-	Compare cmp;
+	std::unique_ptr<Node> root_;
+	Compare cmp_;
 
-	// Small wrapper for comparisons
-	bool less(const Key &a, const Key &b) const { return cmp(a, b); }
+	static bool isRed(const Node *n) { return n && n->red; }
 
-	void splitChild(Node<Key> *x, std::size_t i) {
-		Node<Key> *y = x->children[i].get(); // child to split
-
-		auto z = std::make_unique<Node<Key>>(y->leaf); // new sibling node
-
-		// median index (for t=2, this is index 1 of 3 keys)
-		const std::size_t m = MIN_DEGREE - 1;
-		Key median = y->keys[m];
-
-		// move keys after median into z
-		z->keys.assign(y->keys.begin() + m + 1, y->keys.end());
-		// erase median and right half from y
-		y->keys.erase(y->keys.begin() + m, y->keys.end());
-
-		// move children if y is not a leaf
-		if (!y->leaf) {
-			z->children.assign(
-				std::make_move_iterator(y->children.begin() + MIN_DEGREE),
-				std::make_move_iterator(y->children.end()));
-			y->children.erase(y->children.begin() + MIN_DEGREE,
-							  y->children.end());
-		}
-
-		// insert median into x
-		x->keys.insert(x->keys.begin() + i, median);
-		// add z as child after y
-		x->children.insert(x->children.begin() + i + 1, std::move(z));
+	// Return the owning unique_ptr that points to n (either parent's left/right
+	// or root_)
+	std::unique_ptr<Node> &linkTo(Node *n) {
+		if (!n->parent)
+			return root_;
+		if (n->parent->left.get() == n)
+			return n->parent->left;
+		else
+			return n->parent->right;
 	}
 
-	// --------------------
-	// Insert into non-full node
-	// --------------------
-	void insertNonFull(Node<Key> *x, const Key &k) {
-		if (x->leaf) {
-			// insert key into correct sorted position in this leaf
-			x->keys.insert(x->keys.begin() + lowerBound(x->keys, k), k);
-			return;
-		}
+	// Left rotate around x:
+	//    x                 y
+	//     \      ==>      / \
+    //      y             x  (γ)
+	//     /
+	//   (β)
+	void rotateLeft(Node *x) {
+		Node *p = x->parent;
+		auto &xLink = linkTo(x);
+		std::unique_ptr<Node> y = std::move(x->right);
+		Node *yRaw = y.get();
 
-		// find child to descend into
-		std::size_t i = childIndex(x, k);
+		x->right = std::move(yRaw->left);
+		if (x->right)
+			x->right->parent = x;
 
-		// if that child is full, split it first
-		if (x->children[i]->keys.size() == MAX_KEYS) {
-			splitChild(x, i);
-			// decide whether to go left or right of the promoted median
-			if (!cmp(k, x->keys[i]) && !cmp(x->keys[i], k))
-				return; // equal
-			else if (less(x->keys[i], k))
-				i++;
-		}
+		yRaw->left = std::move(xLink);
+		yRaw->left->parent = yRaw;
+		yRaw->parent = p;
 
-		// recurse
-		insertNonFull(x->children[i].get(), k);
+		xLink = std::move(y);
 	}
 
-	std::size_t lowerBound(const std::vector<Key> &vec, const Key &k) const {
-		std::size_t lo = 0, hi = vec.size();
-		while (lo < hi) {
-			std::size_t mid = (lo + hi) / 2;
-			if (less(vec[mid], k))
-				lo = mid + 1;
-			else
-				hi = mid;
-		}
-		return lo; // position where k should go
+	// Right rotate around x:
+	//        x            y
+	//       /    ==>     / \
+    //      y            (α) x
+	//       \               /
+	//       (β)           (β)
+	void rotateRight(Node *x) {
+		Node *p = x->parent;
+		auto &xLink = linkTo(x);
+		std::unique_ptr<Node> y = std::move(x->left);
+		Node *yRaw = y.get();
+
+		x->left = std::move(yRaw->right);
+		if (x->left)
+			x->left->parent = x;
+
+		yRaw->right = std::move(xLink);
+		yRaw->right->parent = yRaw;
+		yRaw->parent = p;
+
+		xLink = std::move(y);
 	}
 
-	std::size_t childIndex(const Node<Key> *x, const Key &k) const {
-		return lowerBound(x->keys, k);
-	}
-
-	void inorderVisit(const Node<Key> *x, std::ostream &os) const {
-		if (x->leaf) {
-			for (auto &key : x->keys)
-				os << key << ' ';
-			return;
-		}
-		for (std::size_t i = 0; i < x->keys.size(); ++i) {
-			inorderVisit(x->children[i].get(), os); // visit left child
-			os << x->keys[i] << ' ';				// visit key
-		}
-		inorderVisit(x->children.back().get(), os); // visit last child
-	}
-
-	// Recursive helper to print a node with indentation
-	void printNode(const Node<Key> *node, int depth, std::ostream &os) const {
-		// Indent by depth (2 spaces per level)
-		for (int i = 0; i < depth; i++)
-			os << "  ";
-
-		// Print this node's keys
-		os << "[";
-		for (std::size_t i = 0; i < node->keys.size(); ++i) {
-			os << node->keys[i];
-			if (i + 1 < node->keys.size())
-				os << " ";
-		}
-		os << "]\n";
-
-		// Recurse on children if not leaf
-		if (!node->leaf) {
-			for (auto &child : node->children) {
-				printNode(child.get(), depth + 1, os);
+	// Rebalance after inserting z (z is red)
+	void fixAfterInsert(Node *z) {
+		while (z->parent && z->parent->red) {
+			Node *p = z->parent;
+			Node *g = p->parent; // grandparent exists because parent is red and
+								 // root is black
+			if (p == g->left.get()) {
+				Node *u = g->right.get(); // uncle
+				if (isRed(u)) {
+					// Case 1: parent & uncle red -> recolor and continue up
+					p->red = false;
+					u->red = false;
+					g->red = true;
+					z = g;
+				} else {
+					if (z == p->right.get()) {
+						// Case 2: triangle -> rotate to line
+						z = p;
+						rotateLeft(z);
+						p = z->parent;
+						g = p->parent;
+					}
+					// Case 3: line -> rotate opposite and recolor
+					p->red = false;
+					g->red = true;
+					rotateRight(g);
+				}
+			} else { // symmetric: parent is right child
+				Node *u = g->left.get();
+				if (isRed(u)) {
+					p->red = false;
+					u->red = false;
+					g->red = true;
+					z = g;
+				} else {
+					if (z == p->left.get()) {
+						z = p;
+						rotateRight(z);
+						p = z->parent;
+						g = p->parent;
+					}
+					p->red = false;
+					g->red = true;
+					rotateLeft(g);
+				}
 			}
 		}
+	}
+
+	// Inorder traversal
+	void inorderVisit(const Node *x, std::ostream &os) const {
+		if (!x)
+			return;
+		inorderVisit(x->left.get(), os);
+		os << x->key << ' ';
+		inorderVisit(x->right.get(), os);
+	}
+
+	void printNode(const Node *n, int depth, std::ostream &os) const {
+		if (!n)
+			return;
+		for (int i = 0; i < depth; ++i)
+			os << "  ";
+		os << (n->red ? "(R) " : "(B) ") << n->key << "\n";
+		printNode(n->left.get(), depth + 1, os);
+		printNode(n->right.get(), depth + 1, os);
+	}
+
+	// --- verification helpers ---
+	void checkNoRedRed(const Node *n) const {
+		if (!n)
+			return;
+		if (n->red) {
+			if (isRed(n->left.get()) || isRed(n->right.get()))
+				throw std::logic_error("red node has red child");
+		}
+		checkNoRedRed(n->left.get());
+		checkNoRedRed(n->right.get());
+	}
+
+	// Returns black-height if consistent, else -1
+	int blackHeight(const Node *n) const {
+		if (!n)
+			return 1; // null leaves are black
+		int lh = blackHeight(n->left.get());
+		int rh = blackHeight(n->right.get());
+		if (lh < 0 || rh < 0 || lh != rh)
+			return -1;
+		return lh + (n->red ? 0 : 1);
 	}
 };

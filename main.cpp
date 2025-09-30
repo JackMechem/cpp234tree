@@ -1,23 +1,17 @@
 #include "ttftree.hpp"
 #include <iostream>
+#include <vector>
 
-int main(int argv, char **argc) {
-
-	Tree234<int> t; // create a tree storing int keys
-
-	// Insert a sequence of numbers (forces many splits)
-	std::vector<int> vals = {17, 15, 49, 34, 76, 59, 97, 69, 46, 86, 20,
-							 99, 22, 52, 89, 57, 10, 41, 75, 37
-
-	};
+int main() {
+	RBTree<int> t;
+	std::vector<int> vals = {49, 17, 34, 59, 76, 97, 10, 15, 20, 22,
+							 37, 41, 46, 52, 57, 69, 75, 86, 89, 99};
 	for (int v : vals)
 		t.insert(v);
 
-	// Print tree in sorted order
 	std::cout << "Inorder: ";
 	t.inorder();
-	std::cout << "\n Tree Structure: \n";
+	std::cout << "Tree:\n";
 	t.printTree();
-
-	return 0;
+	t.verify();
 }
