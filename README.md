@@ -1,4 +1,4 @@
-# 234 Tree By Jack Mechem
+# Red Black Tree Implementation
 
 #### Comp 282 Project 1
 
