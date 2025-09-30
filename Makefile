@@ -1,11 +1,24 @@
-all: main.o
-	g++ main.o -o ttftree
+CXX      := g++
+CXXFLAGS := -Wall -Wextra -std=c++17
+BUILD    := build
+TARGET   := $(BUILD)/rbtree
+SRC      := main.cpp
+OBJ      := $(BUILD)/main.o
 
-main.o:
-	g++ -c main.cpp -o main.o
+all: $(TARGET)
 
-cleanup:
-	rm main.o && rm ttftree
+$(TARGET): $(OBJ)
+	$(CXX) $(CXXFLAGS) -o $@ $^
 
-run:
-	./ttftree
+$(BUILD)/%.o: %.cpp | $(BUILD)
+	$(CXX) $(CXXFLAGS) -c $< -o $@
+
+$(BUILD):
+	mkdir -p $(BUILD)
+
+clean:
+	rm -rf $(BUILD)
+
+run: $(TARGET)
+	./$(TARGET)
+
